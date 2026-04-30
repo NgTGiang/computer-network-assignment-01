@@ -1,0 +1,60 @@
+TEST Authentication + Proxy
+
+
+
+1. CHẠY SERVER (Terminal 1)
+py start_sampleapp.py --server-ip 127.0.0.1 --server-port 2026
+
+
+
+2. TEST TRỰC TIẾP (Terminal 2)
+2.1 Login admin
+curl.exe -i -c cookie_admin.txt -X POST "http://127.0.0.1:2026/login" -H "Content-Type: application/x-www-form-urlencoded" --data-raw "username=admin&password=123456"
+Kết quả mong đợi:
+- HTTP/1.1 200 OK
+- Có Set-Cookie
+
+
+2.2 Check auth (có cookie)
+curl.exe -i -b cookie_admin.txt "http://127.0.0.1:2026/check-auth"
+Kết quả:
+{"authenticated": true, "username": "admin"}
+
+
+2.3 Check auth (không cookie)
+curl.exe -i "http://127.0.0.1:2026/check-auth"
+Kết quả:
+{"authenticated": false, "message": "Unauthorized"}
+
+
+2.4 Login user1
+curl.exe -i -c cookie_user1.txt -X POST "http://127.0.0.1:2026/login" -H "Content-Type: application/x-www-form-urlencoded" --data-raw "username=user1&password=abc123"
+2.5 Check user1
+curl.exe -i -b cookie_user1.txt "http://127.0.0.1:2026/check-auth"
+Kết quả:
+{"authenticated": true, "username": "user1"}
+
+
+
+3. CHẠY PROXY (Terminal 3)
+Chạy proxy:
+py start_proxy.py --server-ip 127.0.0.1 --server-port 8080
+
+
+
+
+4. TEST QUA PROXY (Terminal 4)
+4.1 Login qua proxy
+curl.exe -i -c proxy_cookie.txt -X POST "http://127.0.0.1:8080/login" -H "Host: 127.0.0.1:8080" -H "Content-Type: application/x-www-form-urlencoded" --data-raw "username=admin&password=123456"
+
+
+4.2 Check auth qua proxy
+curl.exe -i -b proxy_cookie.txt "http://127.0.0.1:8080/check-auth" -H "Host: 127.0.0.1:8080"
+Kết quả:
+{"authenticated": true, "username": "admin"}
+
+
+
+5. TEST API KHÁC (OPTIONAL)
+$body = @{message="hello server"} | ConvertTo-Json -Compress
+curl.exe -i -X POST "http://127.0.0.1:2026/echo" -H "Content-Type: application/json" --data-raw $body
