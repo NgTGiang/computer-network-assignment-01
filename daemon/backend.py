@@ -54,9 +54,8 @@ from .dictionary import CaseInsensitiveDict
 import selectors
 sel = selectors.DefaultSelector()
 
-mode_async = "callback"
-#mode_async = "coroutine"
-mode_async = "threading"
+mode_async = "coroutine"
+async_routes = {}
 
 def handle_client(ip, port, conn, addr, routes):
     """
@@ -105,11 +104,12 @@ async def handle_client_coroutine(reader, writer):
     print("[Backend] Invoke handle_client_coroutine accepted connection from {}".format(addr))
 
     # Handle client in asynchronous mode
-    while True:
-          daemon = HttpAdapter(None, None, None, None, None)
-           await daemon.handle_client_coroutine(reader, writer)
+    daemon = HttpAdapter(None, None, None, None, async_routes)
+    await daemon.handle_client_coroutine(reader, writer)
 
 async def async_server(ip="0.0.0.0", port=7000, routes={}):
+    global async_routes
+    async_routes = routes
     print("[Backend] async_server **ASYNC** listening on port {}".format(port))
     if routes != {}:
         print("[Backend] route settings")
@@ -163,6 +163,7 @@ def run_backend(ip, port, routes):
                print("   + ('{}', '{}'): {}{}".format(key[0], key[1], isCoFunc, str(value)))
 
         if mode_async == "callback":
+            server.setblocking(False)
             sel.register(server, selectors.EVENT_READ, (handle_client_callback, ip, port, routes))
 
         while True:
@@ -185,8 +186,6 @@ def run_backend(ip, port, routes):
             #            change global variable mode_async to select the mechanism
             if mode_async == "callback":
                # Callback implementation - Event driven architecture
-               server.setblocking(False)
-
                events = sel.select(timeout=None)
                for key, mask in events:
                    callback, ip, port, routes = key.data
@@ -195,6 +194,9 @@ def run_backend(ip, port, routes):
             else:
                # Baseline multi-thread implementation
                #client_thread = threading.Thread...
+               client_thread = threading.Thread(target=handle_client, args=(ip, port, conn, addr, routes))
+               client_thread.daemon = True
+               client_thread.start()
 
 
     except socket.error as e:
