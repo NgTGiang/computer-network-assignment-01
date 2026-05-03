@@ -10,7 +10,7 @@
 # while attending the course
 #
 
-from collections.abc import MutableMapping
+from collections import MutableMapping
 
 class CaseInsensitiveDict(MutableMapping):
     """The :class:`CaseInsensitiveDict<MutableMapping>` object, which 
