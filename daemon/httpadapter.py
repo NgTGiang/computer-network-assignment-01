@@ -26,6 +26,10 @@ from .dictionary import CaseInsensitiveDict
 
 import asyncio
 import inspect
+import base64
+import datetime
+import json
+from urllib.parse import urlparse
 
 class HttpAdapter:
     """
@@ -77,12 +81,155 @@ class HttpAdapter:
         #: Conndection address
         self.connaddr = connaddr
         #: Routes
-        self.routes = routes
+        self.routes = routes or {}
         #: Request
         self.request = Request()
         #: Response
         self.response = Response()
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _decode_request(self, raw_msg):
+        """Convert bytes received from a socket into a safe UTF-8 string."""
+        if raw_msg is None:
+            return ""
+        if isinstance(raw_msg, bytes):
+            return raw_msg.decode("utf-8", errors="replace")
+        return str(raw_msg)
+
+    def _read_http_message(self, conn, chunk_size=4096):
+        """Read one HTTP message from a normal socket.
+
+        The original code used only one recv(1024).  That can cut off POST/PUT
+        bodies.  This helper reads the first chunk, checks Content-Length, and
+        continues reading until the declared body length is available.
+        """
+        raw = conn.recv(chunk_size)
+        if not raw:
+            return ""
+
+        header_end = raw.find(b"\r\n\r\n")
+        if header_end == -1:
+            return self._decode_request(raw)
+
+        header_bytes = raw[:header_end].decode("iso-8859-1", errors="replace")
+        content_length = 0
+        for line in header_bytes.split("\r\n")[1:]:
+            if line.lower().startswith("content-length:"):
+                try:
+                    content_length = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    content_length = 0
+                break
+
+        body_start = header_end + 4
+        current_body_len = len(raw) - body_start
+        while current_body_len < content_length:
+            chunk = conn.recv(chunk_size)
+            if not chunk:
+                break
+            raw += chunk
+            current_body_len += len(chunk)
+
+        return self._decode_request(raw)
+
+    async def _read_http_message_async(self, reader, chunk_size=4096):
+        """Read one HTTP message from an asyncio StreamReader."""
+        raw = await reader.read(chunk_size)
+        if not raw:
+            return ""
+
+        header_end = raw.find(b"\r\n\r\n")
+        if header_end == -1:
+            return self._decode_request(raw)
+
+        header_bytes = raw[:header_end].decode("iso-8859-1", errors="replace")
+        content_length = 0
+        for line in header_bytes.split("\r\n")[1:]:
+            if line.lower().startswith("content-length:"):
+                try:
+                    content_length = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    content_length = 0
+                break
+
+        body_start = header_end + 4
+        current_body_len = len(raw) - body_start
+        while current_body_len < content_length:
+            chunk = await reader.read(chunk_size)
+            if not chunk:
+                break
+            raw += chunk
+            current_body_len += len(chunk)
+
+        return self._decode_request(raw)
+
+    def _to_body_bytes(self, content):
+        """Convert a hook return value into bytes and choose a content type."""
+        if content is None:
+            return b"", "text/plain; charset=utf-8"
+
+        if isinstance(content, bytes):
+            return content, "application/json; charset=utf-8"
+
+        if isinstance(content, (dict, list, tuple)):
+            return json.dumps(content).encode("utf-8"), "application/json; charset=utf-8"
+
+        if isinstance(content, str):
+            text = content
+            content_type = "text/html; charset=utf-8" if text.lstrip().startswith("<") else "text/plain; charset=utf-8"
+            return text.encode("utf-8"), content_type
+
+        return str(content).encode("utf-8"), "text/plain; charset=utf-8"
+
+    def _make_http_response(self, content=b"", status_code=200, reason="OK", headers=None):
+        """Build a complete HTTP/1.1 response as bytes."""
+        body, inferred_content_type = self._to_body_bytes(content)
+
+        response_headers = {
+            "Date": datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
+            "Server": "AsynapRous/1.0",
+            "Content-Type": inferred_content_type,
+            "Content-Length": str(len(body)),
+            "Connection": "close",
+        }
+
+        if headers:
+            response_headers.update(headers)
+            response_headers["Content-Length"] = str(len(body))
+
+        status_line = "HTTP/1.1 {} {}\r\n".format(status_code, reason)
+        header_lines = "".join("{}: {}\r\n".format(k, v) for k, v in response_headers.items())
+        return (status_line + header_lines + "\r\n").encode("utf-8") + body
+
+    def _build_error_response(self, status_code, reason, message=None):
+        """Build a small plain-text error response."""
+        body = message or "{} {}".format(status_code, reason)
+        return self._make_http_response(body, status_code=status_code, reason=reason)
+
+    def _invoke_hook(self, req):
+        """Call a synchronous route hook with request headers and body."""
+        try:
+            return req.hook(headers=req.headers, body=req.body)
+        except TypeError:
+            # Some student handlers may use positional parameters.
+            return req.hook(req.headers, req.body)
+
+    async def _invoke_hook_async(self, req):
+        """Call a route hook and await it when it returns a coroutine."""
+        try:
+            result = req.hook(headers=req.headers, body=req.body)
+        except TypeError:
+            result = req.hook(req.headers, req.body)
+
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    # ------------------------------------------------------------------
+    # Client handlers
+    # ------------------------------------------------------------------
     def handle_client(self, conn, addr, routes):
         """
         Handle an incoming client connection.
@@ -104,22 +251,34 @@ class HttpAdapter:
         req = self.request
         # Response handler
         resp = self.response
+        self.routes = routes or self.routes or {}
 
         # Handle the request
-        msg = conn.recv(1024).decode()
-        req.prepare(msg, routes)
-        print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
+        try:
+            msg = self._read_http_message(conn)
+            req.prepare(msg, self.routes)
+            print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
 
-        # Handle request hook
-        if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
+            # Handle request hook
+            if req.hook:
+                #
+                # TODO: handle for App hook here
+                #
+                hook_result = self._invoke_hook(req)
+                if inspect.isawaitable(hook_result):
+                    hook_result = asyncio.run(hook_result)
+                response = self._make_http_response(hook_result)
+            else:
+                response = resp.build_response(req)
 
-        #print("[HttpAdapter] Response content {}".format(response))
-        conn.sendall(response)
-        conn.close()
+            if isinstance(response, str):
+                response = response.encode("utf-8")
+            conn.sendall(response)
+        except Exception as e:
+            print("[HttpAdapter] handle_client exception: {}".format(e))
+            conn.sendall(self._build_error_response(500, "Internal Server Error", str(e)))
+        finally:
+            conn.close()
 
     async def handle_client_coroutine(self, reader, writer):
         """
@@ -133,37 +292,43 @@ class HttpAdapter:
         :param addr (tuple): The client's address.
         :param routes (dict): The route mapping for dispatching requests.
         """
+        addr = writer.get_extra_info("peername")
         # Request handler
         req = self.request
         # Response handler
         resp = self.response
 
-        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
-        addr = writer.get_extra_info("peername")
+        try:
+            print("[HttpAdapter] Invoke handle_client_coroutine connection {}".format(addr))
+            msg = await self._read_http_message_async(reader)
+            req.prepare(msg, self.routes or {})
 
-        # TODO Handle the request asynchronously
-        msg = await reader.read(1024)
+            if req.hook:
+                # TODO: handle for App hook here
+                hook_result = await self._invoke_hook_async(req)
+                response = self._make_http_response(hook_result)
+            else:
+                response = resp.build_response(req)
 
+            if isinstance(response, str):
+                response = response.encode("utf-8")
+            writer.write(response)
+            await writer.drain()
+        except Exception as e:
+            print("[HttpAdapter] handle_client_coroutine exception: {}".format(e))
+            writer.write(self._build_error_response(500, "Internal Server Error", str(e)))
+            await writer.drain()
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
-        req.prepare(msg.decode("utf-8"), routes={})
-
-        # Handle request hook
-        if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
-
-        # Build response
-        #print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
-        response = resp.build_response(req)
-
-        # Send all the response asynchronously
-        writer.write(response)
-        await writer.drain()
-
-    @property
-    def extract_cookies(self, req, resp):
+    # ------------------------------------------------------------------
+    # Response/cookie/header helpers
+    # ------------------------------------------------------------------
+    def extract_cookies(self, req, resp=None):
         """
         Build cookies from the :class:`Request <Request>` headers.
 
@@ -171,13 +336,16 @@ class HttpAdapter:
         :param resp: (Response) The res:class:`Response <Response>` object.
         :rtype: cookies - A dictionary of cookie key-value pairs.
         """
-        cookies = {}
-        for header in headers:
-            if header.startswith("Cookie:"):
-                cookie_str = header.split(":", 1)[1].strip()
-                for pair in cookie_str.split(";"):
-                    key, value = pair.strip().split("=")
-                    cookies[key] = value
+        cookies = CaseInsensitiveDict()
+        headers = getattr(req, "headers", {}) or {}
+        cookie_header = headers.get("Cookie", headers.get("cookie", ""))
+
+        for pair in str(cookie_header).split(";"):
+            pair = pair.strip()
+            if not pair or "=" not in pair:
+                continue
+            key, value = pair.split("=", 1)
+            cookies[key.strip()] = value.strip()
         return cookies
 
     def build_response(self, req, resp):
@@ -187,24 +355,21 @@ class HttpAdapter:
         :param resp: The  response object.
         :rtype: Response
         """
-        response = Response()
-
-        # Set encoding.
-        response.encoding = get_encoding_from_headers(response.headers)
+        response = Response(req)
         response.raw = resp
-        response.reason = response.raw.reason
-
-        if isinstance(req.url, bytes):
-            response.url = req.url.decode("utf-8")
-        else:
-            response.url = req.url
-
-        # Add new cookies from the server.
-        response.cookies = extract_cookies(req)
-
         # Give the Response some context.
         response.request = req
         response.connection = self
+        response.url = req.url.decode("utf-8") if isinstance(req.url, bytes) else req.url
+        response.cookies = self.extract_cookies(req, resp)
+
+        if getattr(resp, "reason", None):
+            response.reason = resp.reason
+        if getattr(resp, "headers", None):
+            response.headers = resp.headers
+            content_type = response.headers.get("Content-Type", "")
+            if "charset=" in content_type:
+                response.encoding = content_type.split("charset=", 1)[1].split(";", 1)[0].strip()
 
         return response
 
@@ -215,51 +380,10 @@ class HttpAdapter:
         :param resp: The  response object.
         :rtype: Response
         """
-        response = Response(req)
-
-        # Set encoding.
-        response.raw = resp
-
-        if isinstance(req.url, bytes):
-            response.url = req.url.decode("utf-8")
-        else:
-            response.url = req.url
-
-        # Give the Response some context.
-        response.request = req
-        response.connection = self
-
+        response = self.build_response(req, resp)
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+        response.encoding = "utf-8"
         return response
-
-
-    # def get_connection(self, url, proxies=None):
-        # """Returns a url connection for the given URL. 
-
-        # :param url: The URL to connect to.
-        # :param proxies: (optional) A Requests-style dictionary of proxies used on this request.
-        # :rtype: int
-        # """
-
-        # proxy = select_proxy(url, proxies)
-
-        # if proxy:
-            # proxy = prepend_scheme_if_needed(proxy, "http")
-            # proxy_url = parse_url(proxy)
-            # if not proxy_url.host:
-                # raise InvalidProxyURL(
-                    # "Please check proxy URL. It is malformed "
-                    # "and could be missing the host."
-                # )
-            # proxy_manager = self.proxy_manager_for(proxy)
-            # conn = proxy_manager.connection_from_url(url)
-        # else:
-            # # Only scheme should be lower case
-            # parsed = urlparse(url)
-            # url = parsed.geturl()
-            # conn = self.poolmanager.connection_from_url(url)
-
-        # return conn
-
 
     def add_headers(self, request):
         """
@@ -271,7 +395,13 @@ class HttpAdapter:
         
         :param request: :class:`Request <Request>` to add headers to.
         """
-        pass
+        if not hasattr(request, "headers") or request.headers is None:
+            request.headers = CaseInsensitiveDict()
+
+        request.headers.setdefault("User-Agent", "AsynapRous/1.0")
+        request.headers.setdefault("Accept", "*/*")
+        request.headers.setdefault("Connection", "close")
+        return request
 
     def build_proxy_headers(self, proxy):
         """Returns a dictionary of the headers to add to any request sent
@@ -288,9 +418,13 @@ class HttpAdapter:
         #       username, password =...
         # we provide dummy auth here
         #
-        username, password = ("user1", "password")
+        parsed = urlparse(proxy or "")
 
+        username = parsed.username
+        password = parsed.password or ""
         if username:
-            headers["Proxy-Authorization"] = (username, password)
+            token = "{}:{}".format(username, password).encode("utf-8")
+            encoded = base64.b64encode(token).decode("ascii")
+            headers["Proxy-Authorization"] = "Basic {}".format(encoded)
 
         return headers

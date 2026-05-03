@@ -23,6 +23,10 @@ The current version supports MIME type detection, content loading and header for
 import datetime
 import os
 import mimetypes
+import inspect
+import asyncio
+from http import HTTPStatus
+
 from .dictionary import CaseInsensitiveDict
 
 BASE_DIR = ""
@@ -83,9 +87,10 @@ class Response():
         : params request : The originating request object.
         """
 
-        self._content = False
+        self._content = b""
         self._content_consumed = False
         self._next = None
+        self._header = b""
 
         #: Integer Code of responded HTTP Status, e.g. 404 or 200.
         self.status_code = None
@@ -93,7 +98,7 @@ class Response():
         #: Case-insensitive Dictionary of Response Headers.
         #: For example, ``headers['content-type']`` will return the
         #: value of a ``'Content-Type'`` response header.
-        self.headers = {}
+        self.headers = CaseInsensitiveDict()
 
         #: URL location of Response.
         self.url = None
@@ -116,8 +121,8 @@ class Response():
 
         #: The :class:`PreparedRequest <PreparedRequest>` object to which this
         #: is a response.
-        self.request = None
-
+        self.request = request
+        self.body = b""
 
     def get_mime_type(self, path):
         """
@@ -129,11 +134,10 @@ class Response():
         """
 
         try:
-            mime_type, _ = mimetypes.guess_type(path)
+            mime_type, _ = mimetypes.guess_type(path or "")
         except Exception:
             return 'application/octet-stream'
         return mime_type or 'application/octet-stream'
-
 
     def prepare_content_type(self, mime_type='text/html'):
         """
@@ -151,25 +155,28 @@ class Response():
 
         # Validate header attr existence
         if not hasattr(self, "headers") or self.headers is None:
-            self.headers = {}
+            self.headers = CaseInsensitiveDict()
+
+        if '/' not in mime_type:
+            mime_type = 'application/octet-stream'
 
         # Processing mime_type based on main_type and sub_type
         main_type, sub_type = mime_type.split('/', 1)
-        print("[Response] Processing main_type={} sub_type={}".format(main_type,sub_type))
+        print("[Response] Processing main_type={} sub_type={}".format(main_type, sub_type))
+
+        self.headers['Content-Type'] = mime_type
+
         if main_type == 'text':
-            self.headers['Content-Type']='text/{}'.format(sub_type)
-            if sub_type == 'plain' or sub_type == 'css':
-                base_dir = BASE_DIR+"static/"
-            elif sub_type == 'html':
-                base_dir = BASE_DIR+"www/"
+            # Static text resources: html pages live in www, CSS/JS/text-like files live in static.
+            if sub_type == 'html':
+                base_dir = BASE_DIR + "www/"
+            elif sub_type in ('plain', 'css', 'csv', 'xml', 'javascript'):
+                base_dir = BASE_DIR + "static/"
             else:
-                handle_text_other(sub_type)
+                base_dir = BASE_DIR + "static/"
         elif main_type == 'image':
             base_dir = BASE_DIR+"static/"
-            self.headers['Content-Type']='image/{}'.format(sub_type)
         elif main_type == 'application':
-            base_dir = BASE_DIR+"apps/"
-            self.headers['Content-Type']='application/{}'.format(sub_type)
         #
         #  TODO: process other mime_type
         #        application/xml       
@@ -182,8 +189,22 @@ class Response():
         #        video/mpeg
         #        ...
         #
+        # REST handlers normally return JSON.  Static app assets can also be served here.
+            if sub_type == 'json':
+                base_dir = BASE_DIR + "apps/"
+            elif sub_type in ('javascript', 'xml', 'zip', 'pdf', 'octet-stream'):
+                base_dir = BASE_DIR + "static/"
+            else:
+                base_dir = BASE_DIR + "apps/"
+
+        elif main_type == 'video':
+            base_dir = BASE_DIR + "static/"
+
+        elif main_type == 'audio':
+            base_dir = BASE_DIR + "static/"
+
         else:
-            raise ValueError("Invalid MEME type: main_type={} sub_type={}".format(main_type,sub_type))
+            raise ValueError("Invalid MIME type: main_type={} sub_type={}".format(main_type,sub_type))
 
         return base_dir
 
@@ -198,21 +219,55 @@ class Response():
         :rtype tuple: (int, bytes) representing content length and content data.
         """
 
-        filepath = os.path.join(base_dir, path.lstrip('/'))
+        """Loads the requested object file from storage."""
+        safe_path = os.path.normpath(path.lstrip('/'))
 
+        # Prevent directory traversal such as /../../secret.txt.
+        if safe_path.startswith('..') or os.path.isabs(safe_path):
+            print("[Response] Unsafe path rejected: {}".format(path))
+            return -1, b""
+
+        filepath = os.path.join(base_dir, safe_path)
         print("[Response] Serving the object at location {}".format(filepath))
             #
             #  TODO: implement the step of fetch the object file
             #        store in the return value of content
             #
+        if not os.path.isfile(filepath):
+            print("[Response] File not found: {}".format(filepath))
+            return -1, b""
+
         try:
             with open(filepath, "rb") as f:
-               content = f.read()
-        except Exception as e:
+                content = f.read()
+        except OSError as e:
             print("[Response] build_content exception: {}".format(e))
             return -1, b""
+
         return len(content), content
 
+    def _status_line(self):
+        """Build the HTTP status line, e.g. HTTP/1.1 200 OK."""
+        status_code = self.status_code or 200
+        reason = self.reason
+        if reason is None:
+            try:
+                reason = HTTPStatus(status_code).phrase
+            except ValueError:
+                reason = "OK"
+        return "HTTP/1.1 {} {}".format(status_code, reason)
+
+    def _set_cookie_headers(self, headers):
+        """Copy response cookies into Set-Cookie headers."""
+        if not self.cookies:
+            return
+
+        cookie_lines = []
+        for key, value in self.cookies.items():
+            cookie_lines.append("{}={}; Path=/; HttpOnly".format(key, value))
+
+        # Multiple Set-Cookie headers are allowed, so store as a list marker here.
+        headers['Set-Cookie'] = cookie_lines
 
     def build_response_header(self, request):
         """
@@ -223,43 +278,52 @@ class Response():
 
         :rtypes bytes: encoded HTTP response header.
         """
-        reqhdr = request.headers
-        rsphdr = self.headers
+        
+        """Constructs encoded HTTP response headers."""
+        reqhdr = request.headers or CaseInsensitiveDict()
 
-        #Build dynamic headers
-        headers = {
-                "Accept": "{}".format(reqhdr.get("Accept", "application/json")),
-                "Accept-Language": "{}".format(reqhdr.get("Accept-Language", "en-US,en;q=0.9")),
-                "Authorization": "{}".format(reqhdr.get("Authorization", "Basic <credentials>")),
-                "Cache-Control": "no-cache",
-                "Content-Type": "{}".format(self.headers['Content-Type']),
-                "Content-Length": "{}".format(len(self._content)),
-        #       "Cookie": "{}".format(reqhdr.get("Cookie", "sessionid=xyz789")), #dummy cooki
-        #
-        # TODO prepare the request authentication
-        #
-        #       self.auth = ...
-                "Date": "{}".format(datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")),
-                "Max-Forward": "10",
-                "Pragma": "no-cache",
-                "Proxy-Authorization": "Basic dXNlcjpwYXNz",  # example base64
-                "Warning": "199 Miscellaneous warning",
-                "User-Agent": "{}".format(reqhdr.get("User-Agent", "Chrome/123.0.0.0")),
-            }
+        if not hasattr(self, "headers") or self.headers is None:
+            self.headers = CaseInsensitiveDict()
 
-        # Header text alignment
-            #
-            #  TODO: implement the header building to create formated
-            #        header from the provied headers
-            #
-            #
-            # TODO prepare the request authentication
-            #
-            # self.auth = ...
+        # Basic status/body headers.
+        headers = CaseInsensitiveDict()
+        headers['Date'] = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        headers['Server'] = 'AsynapRous/1.0'
+        headers['Content-Type'] = self.headers.get('Content-Type', 'text/html')
+        headers['Content-Length'] = str(len(self._content or b""))
+        headers['Connection'] = 'close'
+        headers['Cache-Control'] = 'no-cache'
+        headers['Pragma'] = 'no-cache'
 
+        # Keep useful client context when it is present, but do not create fake auth headers.
+        if reqhdr.get('Authorization'):
+            self.auth = reqhdr.get('Authorization')
+        elif hasattr(request, 'auth'):
+            self.auth = request.auth
+        else:
+            self.auth = None
 
-        return str(fmt_header).encode('utf-8')
+        if reqhdr.get('Accept-Language'):
+            headers['Content-Language'] = reqhdr.get('Accept-Language').split(',')[0]
 
+        # Allow caller-added headers to override defaults except Content-Length.
+        for key, value in self.headers.items():
+            if key.lower() == 'content-length':
+                continue
+            headers[key] = value
+
+        self._set_cookie_headers(headers)
+
+        lines = [self._status_line()]
+        for key, value in headers.items():
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    lines.append("{}: {}".format(key, item))
+            else:
+                lines.append("{}: {}".format(key, value))
+
+        fmt_header = "\r\n".join(lines) + "\r\n\r\n"
+        return fmt_header.encode('utf-8')
 
     def build_notfound(self):
         """
@@ -279,6 +343,29 @@ class Response():
                 "404 Not Found"
             ).encode('utf-8')
 
+    def _normalize_content(self, content):
+        """Convert handler/file content into bytes."""
+        if content is None:
+            return b""
+        if isinstance(content, bytes):
+            return content
+        if isinstance(content, bytearray):
+            return bytes(content)
+        return str(content).encode('utf-8')
+
+    def _run_hook(self, request):
+        """Execute a matched AsynapRous route handler and return bytes."""
+        result = request.hook(headers=request.headers, body=request.body)
+        if inspect.isawaitable(result):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # In a running loop, the coroutine should be awaited by the async adapter.
+                    raise RuntimeError("Coroutine hook cannot be synchronously awaited while loop is running")
+                result = loop.run_until_complete(result)
+            except RuntimeError:
+                result = asyncio.run(result)
+        return self._normalize_content(result)
 
     def build_response(self, request, envelop_content=None):
         """
@@ -290,26 +377,52 @@ class Response():
         """
         print("[Response] Start build response with req {}".format(request))
 
-        path = request.path
+        self.request = request
+        path = request.path or '/index.html'
+        route_path = path.split('?', 1)[0]
 
-        mime_type = self.get_mime_type(path)
+        # RESTful route response: if Request.prepare() found a route hook, call it.
+        if getattr(request, 'hook', None):
+            try:
+                self.status_code = 200
+                self.reason = 'OK'
+                self.headers['Content-Type'] = 'application/json'
+                self._content = self._run_hook(request)
+                self._header = self.build_response_header(request)
+                return self._header + self._content
+            except Exception as e:
+                print("[Response] route hook exception: {}".format(e))
+                self.status_code = 500
+                self.reason = 'Internal Server Error'
+                self.headers['Content-Type'] = 'text/plain'
+                self._content = b"500 Internal Server Error"
+                self._header = self.build_response_header(request)
+                return self._header + self._content
+
+        mime_type = self.get_mime_type(route_path)
         print("[Response] {} path {} mime_type {}".format(request.method, request.path, mime_type))
 
-        base_dir = ""
-
-        #If HTML, parse and serve embedded objects
-        if path.endswith('.html') or mime_type == 'text/html':
-            base_dir = self.prepare_content_type(mime_type = 'text/html')
-        elif mime_type == 'text/css':
-            base_dir = self.prepare_content_type(mime_type = 'text/css')
-        elif mime_type == 'application/json' or mime_type == 'application/octet-stream':
-            base_dir = self.prepare_content_type(mime_type = 'application/json')
-            envelop_content = ""
-
-        #
-        # TODO: add support objects
-        #
-        else:
+        try:
+            base_dir = self.prepare_content_type(mime_type)
+        except ValueError:
             return self.build_notfound()
+
+        # TODO: add support objects
+        # If caller provides dynamic content, use it instead of reading a file.
+        if envelop_content is not None:
+            self.status_code = 200
+            self.reason = 'OK'
+            self._content = self._normalize_content(envelop_content)
+            self._header = self.build_response_header(request)
+            return self._header + self._content
+
+        content_length, content = self.build_content(route_path, base_dir)
+        if content_length < 0:
+            return self.build_notfound()
+
+        self.status_code = 200
+        self.reason = 'OK'
+        self._content = content
+        self._header = self.build_response_header(request)
 
         return self._header + self._content
