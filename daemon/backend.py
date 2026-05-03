@@ -106,8 +106,8 @@ async def handle_client_coroutine(reader, writer):
 
     # Handle client in asynchronous mode
     while True:
-          daemon = HttpAdapter(None, None, None, None, None)
-           await daemon.handle_client_coroutine(reader, writer)
+        daemon = HttpAdapter(None, None, None, None, None)
+        await daemon.handle_client_coroutine(reader, writer)
 
 async def async_server(ip="0.0.0.0", port=7000, routes={}):
     print("[Backend] async_server **ASYNC** listening on port {}".format(port))
@@ -195,7 +195,7 @@ def run_backend(ip, port, routes):
             else:
                # Baseline multi-thread implementation
                #client_thread = threading.Thread...
-
+               pass
 
     except socket.error as e:
       print("Socket error: {}".format(e))
