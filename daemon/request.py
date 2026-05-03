@@ -88,18 +88,16 @@ class Request():
     def prepare_headers(self, request):
         """Prepares the given HTTP headers."""
         lines = request.split('\r\n')
-        headers = {}
+        headers = CaseInsensitiveDict()
         for line in lines[1:]:
             if ': ' in line:
                 key, val = line.split(': ', 1)
-                headers[key.lower()] = val
+                headers[key] = val
         return headers
 
     def fetch_headers_body(self, request):
         """Prepares the given HTTP headers."""
-        # Split request into header section and body section
-        parts = request.split("\r\n\r\n", 1)  # split once at blank line
-
+        parts = request.split("\r\n\r\n", 1)
         _headers = parts[0]
         _body = parts[1] if len(parts) > 1 else ""
         return _headers, _body
@@ -118,7 +116,17 @@ class Request():
         #
         # TODO manage the webapp hook in this mounting point
         #
-        
+        self.headers = self.prepare_headers(request)
+        self._raw_headers, self._raw_body = self.fetch_headers_body(request)
+        self.body = self._raw_body
+        self.cookies = {}
+        cookies = self.headers.get('cookie', '')
+        if cookies:
+            for item in cookies.split(';'):
+                if '=' in item:
+                    key, value = item.strip().split('=', 1)
+                    self.cookies[key] = value
+
         if not routes == {}:
             self.routes = routes
             print("[Request] Routing METHOD {} path {}".format(self.method, self.path))
@@ -128,13 +136,6 @@ class Request():
             # self.hook manipulation goes here
             # ...
             #
-
-        self._raw_heaers = ""
-        self._raw_body =  ""
-        cookies = self.headers.get('cookie', '')
-            #
-            #  TODO: implement the cookie function here
-            #        by parsing the header            #
 
         return
 
