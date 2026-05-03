@@ -26,6 +26,7 @@ from .dictionary import CaseInsensitiveDict
 
 import asyncio
 import inspect
+import traceback
 
 class HttpAdapter:
     """
@@ -105,19 +106,33 @@ class HttpAdapter:
         # Response handler
         resp = self.response
 
-        # Handle the request
-        msg = conn.recv(1024).decode()
-        req.prepare(msg, routes)
-        print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
+        try:
+            msg = conn.recv(65536).decode('utf-8', errors='replace')
+            req.prepare(msg, routes)
+            print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
 
-        # Handle request hook
-        if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
+            # Handle request hook
+            if req.hook:
+                #
+                # TODO: handle for App hook here
+                #
+                result = req.hook(req.headers, req.body)
+                if inspect.isawaitable(result):
+                    result = asyncio.run(result)
+                response = resp.build_response(req, result)
+            else:
+                response = resp.build_response(req)
+        except Exception:
+            traceback.print_exc()
+            response = (
+                "HTTP/1.1 500 Internal Server Error\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 21\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "500 Internal Server Error"
+            ).encode('utf-8')
 
-        #print("[HttpAdapter] Response content {}".format(response))
         conn.sendall(response)
         conn.close()
 
@@ -138,29 +153,39 @@ class HttpAdapter:
         # Response handler
         resp = self.response
 
-        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
         addr = writer.get_extra_info("peername")
+        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
 
-        # TODO Handle the request asynchronously
-        msg = await reader.read(1024)
+        try:
+            msg = await reader.read(65536)
+            req.prepare(msg.decode("utf-8", errors="replace"), self.routes or {})
 
+            # Handle request hook
+            if req.hook:
+                #
+                # TODO: handle for App hook here
+                #
+                result = req.hook(req.headers, req.body)
+                if inspect.isawaitable(result):
+                    result = await result
+                response = resp.build_response(req, result)
+            else:
+                response = resp.build_response(req)
+        except Exception:
+            traceback.print_exc()
+            response = (
+                "HTTP/1.1 500 Internal Server Error\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 21\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "500 Internal Server Error"
+            ).encode('utf-8')
 
-        req.prepare(msg.decode("utf-8"), routes={})
-
-        # Handle request hook
-        if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
-
-        # Build response
-        #print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
-        response = resp.build_response(req)
-
-        # Send all the response asynchronously
         writer.write(response)
         await writer.drain()
+        writer.close()
+        await writer.wait_closed()
 
     @property
     def extract_cookies(self, req, resp):
