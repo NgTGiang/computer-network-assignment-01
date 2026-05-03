@@ -119,6 +119,17 @@ class Response():
         self.request = None
 
 
+    def get_status_reason(self, status_code):
+        return {
+            200: 'OK',
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found',
+            500: 'Internal Server Error',
+        }.get(status_code, 'OK')
+
+
     def get_mime_type(self, path):
         """
         Determines the MIME type of a file based on its path.
@@ -142,7 +153,7 @@ class Response():
 
         :params mime_type (str): MIME type of the requested resource.
 
-        :rtype str: Base directory path for locating the resource.
+        :rtype str: Base directory path for locating the file.
 
         :raises ValueError: If the MIME type is unsupported.
         """
@@ -223,16 +234,13 @@ class Response():
 
         :rtypes bytes: encoded HTTP response header.
         """
-        reqhdr = request.headers
+        reqhdr = request.headers or {}
         rsphdr = self.headers
 
         #Build dynamic headers
         headers = {
-                "Accept": "{}".format(reqhdr.get("Accept", "application/json")),
-                "Accept-Language": "{}".format(reqhdr.get("Accept-Language", "en-US,en;q=0.9")),
-                "Authorization": "{}".format(reqhdr.get("Authorization", "Basic <credentials>")),
                 "Cache-Control": "no-cache",
-                "Content-Type": "{}".format(self.headers['Content-Type']),
+                "Content-Type": "{}".format(self.headers.get('Content-Type', 'text/plain')),
                 "Content-Length": "{}".format(len(self._content)),
         #       "Cookie": "{}".format(reqhdr.get("Cookie", "sessionid=xyz789")), #dummy cooki
         #
@@ -240,11 +248,7 @@ class Response():
         #
         #       self.auth = ...
                 "Date": "{}".format(datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")),
-                "Max-Forward": "10",
-                "Pragma": "no-cache",
-                "Proxy-Authorization": "Basic dXNlcjpwYXNz",  # example base64
-                "Warning": "199 Miscellaneous warning",
-                "User-Agent": "{}".format(reqhdr.get("User-Agent", "Chrome/123.0.0.0")),
+                "Connection": "close",
             }
 
         # Header text alignment
@@ -257,8 +261,14 @@ class Response():
             #
             # self.auth = ...
 
-
-        return str(fmt_header).encode('utf-8')
+        headers.update(rsphdr)
+        status_code = self.status_code or 200
+        reason = self.reason or self.get_status_reason(status_code)
+        fmt_header = "HTTP/1.1 {} {}\r\n".format(status_code, reason)
+        for key, value in headers.items():
+            fmt_header += "{}: {}\r\n".format(key, value)
+        fmt_header += "\r\n"
+        return fmt_header.encode('utf-8')
 
 
     def build_notfound(self):
@@ -290,6 +300,32 @@ class Response():
         """
         print("[Response] Start build response with req {}".format(request))
 
+        self.status_code = 200
+        self.reason = None
+        self.headers = {}
+
+        if envelop_content is not None:
+            payload = envelop_content
+            extra_headers = {}
+            if isinstance(payload, tuple):
+                if len(payload) == 3:
+                    payload, self.status_code, extra_headers = payload
+                elif len(payload) == 2:
+                    payload, self.status_code = payload
+            self.reason = self.get_status_reason(self.status_code)
+            if isinstance(payload, bytes):
+                self._content = payload
+            elif isinstance(payload, str):
+                self._content = payload.encode('utf-8')
+            else:
+                import json
+                self._content = json.dumps(payload).encode('utf-8')
+            self.headers['Content-Type'] = 'application/json'
+            for key, value in extra_headers.items():
+                self.headers[key] = value
+            self._header = self.build_response_header(request)
+            return self._header + self._content
+
         path = request.path
 
         mime_type = self.get_mime_type(path)
@@ -312,4 +348,10 @@ class Response():
         else:
             return self.build_notfound()
 
+        length, content = self.build_content(path, base_dir)
+        if length < 0:
+            return self.build_notfound()
+        self._content = content
+        self.reason = self.get_status_reason(self.status_code or 200)
+        self._header = self.build_response_header(request)
         return self._header + self._content
