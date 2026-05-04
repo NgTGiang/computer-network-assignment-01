@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <title>Skype UI Clone</title>
+        <link rel="stylesheet" href="../static/css/home-chat.css">
+    </head>
+
+    <body>
+
+        <div class="container">
+
+            <!-- LEFT SIDEBAR -->
+            <div class="sidebar">
+                <h2>Chats</h2>
+
+                <div class="chat-item active">
+                    <img src="../static/images/Ca_Rot.png">
+                    <div>
+                        <h4>Cà Rốt</h4>
+                        <p>Hi there...</p>
+                    </div>
+                </div>
+
+                <div class="chat-item">
+                    <img src="../static/images/Cu_Cai.jpg">
+                    <div>
+                        <h4>Củ Cải</h4>
+                        <p>Hello!</p>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- CHAT AREA -->
+            <div class="chat-area">
+
+                <div class="chat-header">
+                    <h3>Cà Rốt</h3>
+                </div>
+
+                <div class="chat-body" id="chatBody">
+
+                    <div class="message left">
+                        <p>When are you coming?</p>
+                    </div>
+
+                    <div class="message right">
+                        <p>Hi dear, I'll be there by 7:30pm</p>
+                    </div>
+
+                </div>
+
+                <div class="chat-input">
+                    <input type="text" id="messageInput" placeholder="Type here...">
+                    <button onclick="sendMessage()">➤</button>
+                </div>
+
+            </div>
+
+            <!-- PROFILE PANEL -->
+            <div class="profile">
+                <img src="../static/images/Ca_Rot.png" class="profile-img">
+                <h3>Cà Rốt</h3>
+                <p class="status">● Active now</p>
+
+                <div class="info">
+                    <p>Email: CaRot123@gmail.com</p>
+                    <p>Phone: +123456</p>
+                </div>
+
+                <button class="block-btn">Block</button>
+            </div>
+
+        </div>
+
+        <script src="../static/js/script.js"></script>
+    </body>
+
+</html>
