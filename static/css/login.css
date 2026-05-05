@@ -54,3 +54,9 @@ body {
     border-radius: 5px;
     cursor: pointer;
 }
+.error-message {
+    color: #d32f2f;
+    min-height: 20px;
+    margin-bottom: 10px;
+    text-align: center;
+}

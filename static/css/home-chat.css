@@ -14,23 +14,58 @@ body {
     height: 100vh;
 }
 
-/* SIDEBAR */
 .sidebar {
     width: 25%;
     background: #ffffff;
     border-right: 1px solid #ddd;
     padding: 20px;
+    overflow-y: auto;
 }
 
-.chat-item {
+.sidebar-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.sidebar-title button,
+#broadcastBtn {
+    border: none;
+    background: orange;
+    color: white;
+    border-radius: 12px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.small-label {
+    color: #777;
+    font-size: 13px;
+    margin: 10px 0;
+}
+
+.channel-title {
+    margin-top: 20px;
+}
+
+.chat-item,
+.channel-item {
     display: flex;
     gap: 10px;
     padding: 10px;
     border-radius: 10px;
     cursor: pointer;
+    margin-bottom: 8px;
 }
 
-.chat-item:hover {
+.channel-item {
+    display: block;
+    background: #f7f7f7;
+}
+
+.chat-item:hover,
+.channel-item:hover {
     background: #f0f0f0;
 }
 
@@ -45,7 +80,16 @@ body {
     border-radius: 50%;
 }
 
-/* CHAT AREA */
+.chat-item p,
+.empty-list {
+    font-size: 12px;
+    color: #777;
+}
+
+.chat-item.active p {
+    color: white;
+}
+
 .chat-area {
     width: 50%;
     display: flex;
@@ -56,6 +100,15 @@ body {
     padding: 15px;
     border-bottom: 1px solid #ddd;
     background: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#notificationText {
+    color: #777;
+    font-size: 13px;
+    margin-top: 4px;
 }
 
 .chat-body {
@@ -64,7 +117,12 @@ body {
     overflow-y: auto;
 }
 
-/* MESSAGE */
+.empty-state {
+    color: #777;
+    text-align: center;
+    margin-top: 30px;
+}
+
 .message {
     max-width: 60%;
     margin-bottom: 10px;
@@ -73,6 +131,14 @@ body {
 .message p {
     padding: 10px;
     border-radius: 20px;
+    word-break: break-word;
+}
+
+.message span {
+    display: block;
+    font-size: 11px;
+    color: #888;
+    margin-top: 3px;
 }
 
 .left p {
@@ -81,6 +147,7 @@ body {
 
 .right {
     margin-left: auto;
+    text-align: right;
 }
 
 .right p {
@@ -88,11 +155,11 @@ body {
     color: white;
 }
 
-/* INPUT */
 .chat-input {
     display: flex;
     padding: 10px;
     border-top: 1px solid #ddd;
+    background: white;
 }
 
 .chat-input input {
@@ -112,7 +179,6 @@ body {
     cursor: pointer;
 }
 
-/* PROFILE */
 .profile {
     width: 25%;
     background: #fff;
@@ -131,6 +197,13 @@ body {
     margin: 10px 0;
 }
 
+.info {
+    margin-top: 20px;
+    text-align: left;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
 .block-btn {
     margin-top: 20px;
     padding: 10px;
@@ -138,4 +211,33 @@ body {
     border: none;
     border-radius: 10px;
     cursor: pointer;
+    width: 100%;
+}
+
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+}
+
+.peer-info {
+  flex: 1;
+}
+
+.unread-badge {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ff4d4f;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unread-badge.hidden {
+  display: none;
 }

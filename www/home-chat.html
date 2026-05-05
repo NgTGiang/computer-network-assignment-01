@@ -1,81 +1,60 @@
 <!DOCTYPE html>
 <html lang="en">
-
     <head>
         <meta charset="UTF-8">
-        <title>Skype UI Clone</title>
-        <link rel="stylesheet" href="../static/css/home-chat.css">
+        <title>Hybrid Chat App</title>
+        <link rel="stylesheet" href="css/home-chat.css">
     </head>
 
     <body>
-
         <div class="container">
-
-            <!-- LEFT SIDEBAR -->
             <div class="sidebar">
-                <h2>Chats</h2>
-
-                <div class="chat-item active">
-                    <img src="../static/images/Ca_Rot.png">
-                    <div>
-                        <h4>Cà Rốt</h4>
-                        <p>Hi there...</p>
-                    </div>
+                <div class="sidebar-title">
+                    <h2>Chats</h2>
+                    <button id="refreshBtn" title="Refresh peer list">&#8635</button>
                 </div>
 
-                <div class="chat-item">
-                    <img src="../static/images/Cu_Cai.jpg">
-                    <div>
-                        <h4>Củ Cải</h4>
-                        <p>Hello!</p>
-                    </div>
-                </div>
+                <p class="small-label">Online peers</p>
+                <div id="userList"></div>
 
+                <p class="small-label channel-title">Channels</p>
+                <div id="channelList"></div>
             </div>
 
-            <!-- CHAT AREA -->
             <div class="chat-area">
-
                 <div class="chat-header">
-                    <h3>Cà Rốt</h3>
+                    <div>
+                        <h3 id="chatTitle">Select a peer to chat</h3>
+                        <p id="notificationText">No new messages</p>
+                    </div>
+                    <button id="broadcastBtn">Broadcast</button>
                 </div>
 
                 <div class="chat-body" id="chatBody">
-
-                    <div class="message left">
-                        <p>When are you coming?</p>
-                    </div>
-
-                    <div class="message right">
-                        <p>Hi dear, I'll be there by 7:30pm</p>
-                    </div>
-
+                    <div class="empty-state">Choose a peer on the left to start direct P2P chat.</div>
                 </div>
 
                 <div class="chat-input">
                     <input type="text" id="messageInput" placeholder="Type here...">
-                    <button onclick="sendMessage()">➤</button>
+                    <button id="sendBtn">➤</button>
                 </div>
-
             </div>
 
-            <!-- PROFILE PANEL -->
             <div class="profile">
-                <img src="../static/images/Ca_Rot.png" class="profile-img">
-                <h3>Cà Rốt</h3>
-                <p class="status">● Active now</p>
+                <img src="images/avatar1.jpg" class="profile-img" onerror="this.style.display='none'">
+                <h3 id="profileName">No peer selected</h3>
+                <p class="status" id="profileStatus">● Waiting</p>
 
                 <div class="info">
-                    <p>Email: CaRot123@gmail.com</p>
-                    <p>Phone: +123456</p>
+                    <p id="currentUserText">Current user: -</p>
+                    <p id="peerAddress">Peer address: -</p>
+                    <p>Mode: Client-server discovery + P2P message delivery</p>
                 </div>
 
-                <button class="block-btn">Block</button>
+                <button class="block-btn" id="logoutBtn">Logout</button>
             </div>
-
         </div>
 
-        <script src="../static/js/script.js"></script>
+        <script src="js/home-chat.js"></script>
     </body>
-
 </html>
